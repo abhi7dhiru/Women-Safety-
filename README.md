@@ -1,133 +1,153 @@
-## Hacktoberfest-2024
+import cv2
+import numpy as np
+from deepface import DeepFace
+import threading
+from datetime import datetime
+import os
+import geopy
+from geopy.geocoders import Nominatim
 
-**Check out this project as well: [Annoying Button😡](https://annoyingsubmitbutton.netlify.app/). It's Hacktoberfest GitHub repo: [https://github.com/fineanmol/Annoying-submit-button](https://github.com/fineanmol/Annoying-submit-button)**
+# Function to improve brightness, contrast, and sharpen the frame
+def enhance_image(frame, alpha=1.3, beta=30, sharpen=False):
+    frame = cv2.convertScaleAbs(frame, alpha=alpha, beta=beta)
+    if sharpen:
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        frame = cv2.filter2D(src=frame, ddepth=-1, kernel=kernel)
+    return frame
 
-# Submit your PR on this new repo [Hacktoberfest](https://github.com/fineanmol/hacktoberfest). We are merging all PRs there.
+# Function to analyze the frame with DeepFace
+def analyze_frame(rgb_frame):
+    try:
+        return DeepFace.analyze(rgb_frame, actions=['age', 'gender'], enforce_detection=False)
+    except Exception as e:
+        print(f"DeepFace error: {e}")
+        return []
 
-In this current repo, there are a lot of conflicts; we are not merging until all conflicts are resolved. Hacktoberfest { [Live Website](https://fineanmol.github.io/Hacktoberfest2024/) }
+# Get real-time location using geopy
+def get_location():
+    try:
+        geolocator = Nominatim(user_agent="geoapiExercises")
+        location = geolocator.geocode("Jagriti Vihar Tyagi Home")  # You can change this to dynamic fetching if you have GPS coordinates.
+        return f"{location.address}" if location else "Jagriti Vihar Tyagi Home"
+    except:
+        return "Jagriti Vihar Tyagi Home"
 
-**This is a beginner-friendly project to help you get started with your [Hacktoberfest](https://hacktoberfest.digitalocean.com/). If you don't know where to start, feel free to watch the videos linked below and read the contribution rules. Happy Learning <3 💙 !!**
+# Create a directory to save captured images
+save_dir = os.path.join(os.path.expanduser("~"), "Desktop", "Image_Collection", "captured_images")
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir)
 
-P.S. Star ⭐ and share this repository if you had fun!! 😍
+# Initialize the webcam with error checking
+cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    print("Error: Could not open camera.")
+    exit()
 
-Hacktoberfest 2024
-![Event Completed](/scripts/Event_Completed_.png)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-# 📌 Videos 📽️:
+# Variables for threading and processing
+results = []
+processing_frame = False
+frame_count = 0
+analyze_interval = 5  # Analyze every 5th frame
+location = get_location()
 
-- [Hacktoberfest Intro](https://www.youtube.com/watch?v=mq_FIHdxmIk)
-- [How to pull request [Overview]](https://youtu.be/DIj2q02gvKs)
-- [Merge Conflict / comment](https://youtu.be/zOx5PJTY8CI)
+# Function to process the frame in a separate thread
+def analyze_and_store_results(rgb_frame, original_frame):
+    global results, processing_frame
 
-# Contribution Rules📚:
+    analyzed_results = analyze_frame(rgb_frame)
 
-- You are allowed to make pull requests that break the rules. We just merge it ;)
-- Do NOT add any build steps, e.g., npm install (we want to keep this a simple static site)
-- Do NOT remove other content.
-- Styling/code can be pretty, ugly, or stupid, big or small, as long as it works
-<!-- - Add your name to the contributorsList file. -->
-- Try to keep pull requests small to minimize merge conflicts
+    # Process the detected faces in the frame
+    for i, result in enumerate(analyzed_results):
+        gender = result.get('gender')
+        face_positions = result.get('region', {})
 
-## Getting Started 🤩🤗:
+        if face_positions:
+            # Ensure valid face positions
+            x, y, w, h = face_positions.get('x', 0), face_positions.get('y', 0), face_positions.get('w', 0), face_positions.get('h', 0)
+            if w > 0 and h > 0:
+                # Overlay the location on the image
+                cv2.putText(original_frame, f"Location: {location}", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+                filename = os.path.join(save_dir, f"snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
+                
+                # Save the current frame with text information
+                cv2.imwrite(filename, original_frame)
+                print(f"Saved: {filename}")
 
-- Fork this repo (button on top)
-- Clone it on your local machine
+                # Show the captured image in a separate window
+                captured_img = cv2.imread(filename)
+                captured_img_resized = cv2.resize(captured_img, (640, 480))  # Resize if needed
+                cv2.imshow('Captured Image', captured_img_resized)
 
-```terminal
-git clone https://github.com/fineanmol/Hacktoberfest2024.git
-```
+    results.clear()
+    results.extend(analyzed_results)
+    processing_frame = False
 
-- Navigate to the project directory.
+# Create a named window to set the size explicitly
+cv2.namedWindow('Age and Gender Detection', cv2.WINDOW_NORMAL)
+cv2.resizeWindow('Age and Gender Detection', 1280, 720)  # Resize to your desired dimensions
 
-```terminal
-cd Hacktoberfest2024
-```
+while True:
+    # Capture frame-by-frame
+    ret, frame = cap.read()
 
-- Create a new branch
+    if ret:
+        frame_count += 1
 
-```markdown
-git checkout -b my-new-branch
-```
+        # Enhance the image for better detection
+        enhanced_frame = enhance_image(frame, alpha=1.3, beta=30, sharpen=True)
+        rgb_frame = cv2.cvtColor(enhanced_frame, cv2.COLOR_BGR2RGB)
 
-<!--- - Add your name to `contributors/contributorsList.js`. -->
+        # Only analyze every 5th frame to reduce delay
+        if frame_count % analyze_interval == 0 and not processing_frame:
+            processing_frame = True
+            # Use a separate thread to analyze the frame
+            analysis_thread = threading.Thread(target=analyze_and_store_results, args=(rgb_frame, frame.copy()))
+            analysis_thread.daemon = True
+            analysis_thread.start()
 
-```markdown
-git add .
-```
+        # Get current date, time, and day of the week
+        current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_day = datetime.now().strftime("%A")
 
-- Commit your changes.
+        # If results are available, display them
+        if results:
+            for result in results:
+                age = result.get('age', 'N/A')
+                gender = result.get('gender', 'N/A')
+                gender_confidence = result.get('gender_confidence', 0)
+                face_positions = result.get('region', {})
 
-```markdown
-git commit -m "Relevant message"
-```
+                if face_positions:
+                    x, y, w, h = face_positions['x'], face_positions['y'], face_positions['w'], face_positions['h']
+                    cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                    label_text = f"{gender} ({gender_confidence :.2f}%)"
+                    label_text_age = f"Age: {age} years old"
+                    cv2.putText(frame, label_text, (50, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                    cv2.putText(frame, label_text_age, (50, y - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
 
-- Then push
+        # Display location, date, time, and day
+        cv2.putText(frame, f"Location: {location}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(frame, f"Date & Time: {current_datetime}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.putText(frame, f"Day: {current_day}", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-```markdown
-git push origin my-new-branch
-```
+        # Resize frame for display
+        resized_frame = cv2.resize(frame, (1280, 720))
 
-- Create a new pull request from your forked repository
+        # Save the frame with overlays (location, date, time, day, etc.)
+        save_filename = os.path.join(save_dir, f"full_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
+        cv2.imwrite(save_filename, frame)
+        print(f"Full image saved with overlays: {save_filename}")
 
-<br>
+        # Display the resulting frame
+        cv2.imshow('Age and Gender Detection', resized_frame)
 
-## Avoid Conflicts {Syncing your fork}
+    # Break the loop on 'q' key press
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-An easy way to avoid conflicts is to add an 'upstream' for your git repo, as other PRs may be merged while you're working on your branch/fork.   
-
-```terminal
-git remote add upstream https://github.com/fineanmol/Hacktoberfest2024
-```
-
-You can verify that the new remote has been added by typing:
-
-```terminal
-git remote -v
-```
-
-To pull any new changes from your parent repo, simply run:
-
-```terminal
-git merge upstream/master
-```
-
-This will give you any eventual conflicts and allow you to easily solve them in your repo. It's a good idea to use it frequently in between your own commits to make sure that your repo is up to date with its parent.
-
-For more information on syncing forks, [read this article from GitHub](https://help.github.com/articles/syncing-a-fork/).
-
-## Swags of Hacktoberfest:
-
-Many candidates get attracted to Hacktoberfest for the swags. After 4 successfully merged pull requests, as of 2024, you will be eligible to get a Hacktoberfest T-shirt and some stickers delivered to your doorstep.
-
-<li><B><p><img src="https://miro.medium.com/max/1050/1*4JctIO7irt8hFxBmTvUpiQ.jpeg" width="400" height="225" style="width: 400px; height: 225px;" alt="t-shirt image"></a></p><p><img src="https://miro.medium.com/max/1050/1*jkffr74bq5RsQ_xqDhgqYQ.jpeg" width="400" height="225" style="width: 400px; height: 225px;" alt="stickers image"></p>
-</b></li>
-
-# FAQs (Frequently Asked Questions)
-
-- Who all can contribute?
-  - Anyone with a GitHub account and who is signed up for [Hacktoberfest](https://hacktoberfest.digitalocean.com/) :)
-- Are you getting paid for this?
-  - Sadly, no. But we think we should. This is 100% unofficial, and we do it for fun, fame, and glory.
-- Who are you, and why are you doing this?
-  - We are two programmers from India, [Anmol](https://www.linkedin.com/in/fineanmol/) and [Ritesh](https://github.com/ritesh2905). We are doing this because we love Open Source and Hacktoberfest. We want to make it easier for people to get started with Hacktoberfest and Open Source.
-- Why are you not using DigitalOcean?
-  - Because we only know JavaScript and suck at servers. We use [now](https://zeit.co/now) instead.
-- Should I come closer to the text saying 'Don't come closer' on the left side of the home tab?
-  - Nope.
-- How many pull requests (PRs) must be made if I want to get an awesome T-shirt from Hacktoberfest 2024?
-  - 4
-- How do I track my progress to get an awesome shirt from Hacktoberfest 2024?
-  - [Go to:](https://hacktoberfest.digitalocean.com/profile/). (Check out your own stats at the top right)
-- What is the duration of Hacktoberfest 2024?
-  - It is from 1st October to 31st October 2024.
-- What is the event for?
-  - For open source community engagement and to learn how to contribute to open source.
-
-###### *We will do our best to merge as much as possible from everyone. However, time is limited, and the merge conflicts are horrible :astonished: <3*
-<br>
-
-## Our Top Contributors 
-
-<p align="center"><a href="https://github.com/fineanmol/Hacktoberfest2024/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=fineanmol/Hacktoberfest2024" max={1000} columns={100} anon={1}/>
-</a></p>
+# Release the capture and close all windows
+cap.release()
+cv2.destroyAllWindows()
